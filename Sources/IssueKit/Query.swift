@@ -9,7 +9,6 @@ import Foundation
 import ArgumentParser
 import IssueKitCore
 
-@main
 struct Query: AsyncParsableCommand {
     public static let configuration = CommandConfiguration(
         abstract: "Query a a repository for issues based on various parameters"
@@ -68,13 +67,18 @@ struct Query: AsyncParsableCommand {
         let task = try GitHub
             .logging(verbose: verbose)
             .repository(path: path)
-            .query(queryItems, all: all)
+            .query(.issues, query: queryItems, all: all)
         
         var issues = try await task.value
+        
+        
         
         if nopr {
             issues = issues.filter { $0.pullRequest == nil }
         }
+        
+        let data = try JSONEncoder().encode(issues)
+        try data.write(to: Foundation.URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("issues.json"))
         
         if generate {
             let path = Foundation.URL(fileURLWithPath: FileManager.default.currentDirectoryPath)

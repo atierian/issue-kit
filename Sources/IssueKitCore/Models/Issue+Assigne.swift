@@ -8,7 +8,7 @@
 import Foundation
 
 public extension Issue {
-    struct Assignee: Codable {
+    public struct Assignee: Codable {
         public let login: String
         public let id: Int
         public let nodeID: String
