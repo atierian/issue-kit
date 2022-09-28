@@ -9,7 +9,6 @@ import Foundation
 import ArgumentParser
 import IssueKitCore
 
-@main
 struct Query: AsyncParsableCommand {
     public static let configuration = CommandConfiguration(
         abstract: "Query a a repository for issues based on various parameters"
@@ -44,7 +43,7 @@ struct Query: AsyncParsableCommand {
     
     @Flag(name: .long, help: "Exclude Pull Requests. Filtering happens locally")
     private var nopr: Bool = false
-    
+        
     mutating func run() async throws {
         var queryItems = [
             URLQueryItem(name: "state", value: state.rawValue),
@@ -58,27 +57,30 @@ struct Query: AsyncParsableCommand {
         }
         
         labels.forEach {
-            queryItems.append(.init(name: "labels", value: $0))
+            queryItems.append(URLQueryItem(name: "labels", value: $0))
         }
         
         if verbose {
             print("labels: \(labels)")
         }
-        
+
         let task = try GitHub
             .logging(verbose: verbose)
             .repository(path: path)
-            .query(queryItems, all: all)
+            .query(.issues, query: queryItems, all: all)
         
         var issues = try await task.value
+
         if nopr {
             issues = issues.filter { $0.pullRequest == nil }
-            issues = issues.filter { !$0.labels.contains(where: { $0.name == "feature-request" }) }
         }
         
-            
+        let data = try JSONEncoder().encode(issues)
+        try data.write(to: Foundation.URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("issues.json"))
+        
         if generate {
-            let path = Foundation.URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("issue_report.csv")
+            let path = Foundation.URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("issue_report.csv")
             let csv = Converting.standard.run(issues)
             FileManager.default.createFile(atPath: path.path, contents: csv)
             print("Report generated at: \(path)")

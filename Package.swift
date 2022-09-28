@@ -24,6 +24,5 @@ let package = Package(
             ]
         ),
         .target(name: "IssueKitCore")
-            
     ]
 )

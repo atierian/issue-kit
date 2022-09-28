@@ -7,7 +7,15 @@
 
 import Foundation
 
-public struct Issue: Codable {
+public struct Issue: Codable, Hashable {
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id
+    }
+    
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+    
     public let id: Int
     public let nodeID: String
     public let url: String
@@ -19,7 +27,7 @@ public struct Issue: Codable {
     public let number: Int
     public let state: String
     public let title: String
-    public let body: String
+    public var body: String?
     public let user: Assignee
     public let labels: [Label]
     public let assignee: Assignee?
