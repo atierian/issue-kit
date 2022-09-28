@@ -27,7 +27,7 @@ public struct Issue: Codable, Hashable {
     public let number: Int
     public let state: String
     public let title: String
-    public let body: String
+    public var body: String?
     public let user: Assignee
     public let labels: [Label]
     public let assignee: Assignee?

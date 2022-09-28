@@ -63,16 +63,14 @@ struct Query: AsyncParsableCommand {
         if verbose {
             print("labels: \(labels)")
         }
-        
+
         let task = try GitHub
             .logging(verbose: verbose)
             .repository(path: path)
             .query(.issues, query: queryItems, all: all)
         
         var issues = try await task.value
-        
-        
-        
+
         if nopr {
             issues = issues.filter { $0.pullRequest == nil }
         }

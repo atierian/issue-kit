@@ -5,3 +5,8 @@
 xcuserdata/
 DerivedData/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+comments.json
+issues.json
+issue_summary_report.csv
+config.txt
+_issue_comment_lookup

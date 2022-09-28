@@ -31,56 +31,7 @@ struct Report: AsyncParsableCommand {
     
     @Flag(name: .shortAndLong, help: "Verbose logging. Default 'false'")
     private var verbose: Bool = false
-    
-    //    func issues() async throws -> [Issue] {
-    //        let cachedIssuesFile = Foundation.URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-    //            .appendingPathComponent("issues.json")
-    //
-    //        let issues: [Issue]
-    //        do {
-    //            let data = try Data(contentsOf: cachedIssuesFile)
-    //            issues = try JSONDecoder().decode([Issue].self, from: data)
-    //            print("Retrieved Issues from \(cachedIssuesFile.absoluteString)")
-    //        } catch {
-    //            let task = try GitHub
-    //                .logging(verbose: verbose)
-    //                .repository(path: path)
-    //                .query(.issues, query: queryItems, all: true)
-    //
-    //            issues = try await task.value
-    //                .filter { $0.pullRequest == nil }
-    //
-    //            let data = try JSONEncoder().encode(issues)
-    //            try data.write(to: cachedIssuesFile)
-    //            print("Comments collected at \(cachedIssuesFile.absoluteString)")
-    //        }
-    //
-    //        return issues
-    
-    /*
-     let cachedCommentsFile = Foundation.URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-     .appendingPathComponent("comments.json")
-     let comments: [Comment]
-     do {
-     let data = try Data(contentsOf: cachedCommentsFile)
-     comments = try JSONDecoder().decode([Comment].self, from: data)
-     print("Retrieved Comments from \(cachedCommentsFile.absoluteString)")
-     } catch {
-     let task = try GitHub
-     .logging(verbose: verbose)
-     .repository(path: path)
-     .query(.comments, query: queryItems, all: true)
-     
-     comments = try await task.value
-     
-     let data = try JSONEncoder().encode(comments)
-     try data.write(to: cachedCommentsFile)
-     print("Comments collected at \(cachedCommentsFile.absoluteString)")
-     }
-     */
-    
-    //    }
-    
+
     func get<T>(
         _ resource: GitHub.Request.Path<T>,
         query: [URLQueryItem],
@@ -95,32 +46,54 @@ struct Report: AsyncParsableCommand {
         do {
             let data = try Data(contentsOf: cachedFile)
             resources = try JSONDecoder().decode([T].self, from: data)
-            print("Retrieved \(resource.description) from \(cachedFile.absoluteString)")
         } catch {
+            let config = try config()
             let task = try GitHub
                 .logging(verbose: verbose)
-                .repository(path: path)
+                .config(config)
                 .query(resource, query: query, all: true)
-            
             resources = try await task.value
                 .filter(clientSideFilter)
-            
+
             let data = try JSONEncoder().encode(resources)
             try data.write(to: cachedFile)
-            print("\(resource.description.uppercased()) collected at \(cachedFile.absoluteString)")
         }
         
         return resources
     }
     
-    private func cache(
+    private func issueCommentLink(
         issues: [Issue],
         comments: [Comment]
     ) -> [Issue: [Comment]] {
-        [:]
+        let cachedLookup = Foundation.URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath
+        )
+            .appendingPathComponent("_issue_comment_lookup")
+
+        if let data = try? Data(contentsOf: cachedLookup),
+           let decoded = try? JSONDecoder().decode([Issue: [Comment]].self, from: data) {
+            return decoded
+        }
+
+        let linked = issues.reduce(into: [Issue: [Comment]]()) { dict, issue in
+            dict[issue] = comments
+                .filter { $0.issueURL == issue.url }
+        }
+
+        do {
+            let data = try JSONEncoder().encode(linked)
+            try data.write(to: cachedLookup)
+        } catch {}
+
+        return linked
     }
     
-    private func queryItems(direction: IssueDirection, since: String?, labels: [String]) -> [URLQueryItem] {
+    private func queryItems(
+        direction: IssueDirection,
+        since: String?,
+        labels: [String]
+    ) -> [URLQueryItem] {
         var queryItems = [
             URLQueryItem(name: "state", value: "all"),
             URLQueryItem(name: "direction", value: direction.rawValue),
@@ -130,11 +103,13 @@ struct Report: AsyncParsableCommand {
             queryItems.append(URLQueryItem(name: "since", value: since))
         }
         if !labels.isEmpty {
-            queryItems.append(URLQueryItem(name: "labels", value: labels.joined(separator: ",")))
+            queryItems.append(
+                URLQueryItem(name: "labels", value: labels.joined(separator: ","))
+            )
         }
         return queryItems
     }
-    
+
     mutating func run() async throws {
         let queryItems = queryItems(
             direction: direction,
@@ -143,7 +118,8 @@ struct Report: AsyncParsableCommand {
         )
                 
         if verbose { print("labels: \(labels)") }
-        
+        if verbose { print("query items: \(queryItems)")}
+
         let issues = try await get(
             .issues,
             query: queryItems
@@ -190,35 +166,47 @@ struct Report: AsyncParsableCommand {
             input: issues,
             Reporting.newIssuesOpenedInThePrevious(timePeriod:)
         )
+
         let issuesClosedPerTimeIntervalLines = timeIntervalBased(
             input: issues,
             Reporting.issuesClosedThePrevious(timePeriod:)
         )
+
         let plusMinusPerTimeIntervalLines = timeIntervalBased(
             input: issues,
             Reporting.plusMinusInThePrevious(timePeriod:)
         )
-        
-        let cache = cache(issues: issues, comments: comments)
-        let issuesWithoutMaintainerResponse = Reporting
-            .issuesWithoutMaintainerResponse
-            .generate(cache)
-        
-        let issuesWithoutMaintainerResponseWithinTwoWeekdaysTimeIntervalLines = timeIntervalBased(
-            input: cache,
-            Reporting.issuesWithoutMainterResponseInTwoDays(timePeriod:)
-        )
-        
+
+        let maintainerResponseLines: [Line] = (try? config().maintainers)
+            .map { maintainers in
+                let issues = issueCommentLink(issues: issues, comments: comments)
+
+                let issuesWithoutMaintainerResponse = Reporting
+                    .issuesWithoutMaintainerResponse
+                    .generate((issues, maintainers))
+
+                let issuesWithoutMaintainerResponseWithinTwoWeekdaysTimeIntervalLines = timeIntervalBased(
+                    input: (issues, maintainers),
+                    Reporting.issuesWithoutMainterResponseInTwoDays(timePeriod:)
+                )
+
+                return issuesWithoutMaintainerResponseWithinTwoWeekdaysTimeIntervalLines +
+                issuesWithoutMaintainerResponse
+            } ?? []
+
         return [
             totalIssuesLine,
             openIssuesLine
-        ] + zip(zip(
-            issuesOpenedPerTimeIntervalLines,
-            issuesClosedPerTimeIntervalLines),
-            plusMinusPerTimeIntervalLines)
-        .flatMap {
-            [$0.0.0, $0.0.1, $0.1]
-        } + issuesWithoutMaintainerResponseWithinTwoWeekdaysTimeIntervalLines
+        ] +
+        zip(
+            zip(
+                issuesOpenedPerTimeIntervalLines,
+                issuesClosedPerTimeIntervalLines
+            ),
+            plusMinusPerTimeIntervalLines
+        )
+        .flatMap { [$0.0.0, $0.0.1, $0.1] }
+        + maintainerResponseLines
     }
     
     func generateReport(issues: [Issue], comments: [Comment]) {
@@ -227,157 +215,5 @@ struct Report: AsyncParsableCommand {
         let csv = Converting.report.run(issues)
         FileManager.default.createFile(atPath: reportURL.path, contents: csv)
         print("Report generated at: \(reportURL)")
-    }
-}
-
-struct Cache: Codable {
-    private let issues: [Issue: [Comment]]
-    let comments: [Comment]
-}
-
-struct TimePeriod {
-    static var calendar: Calendar { Calendar.current }
-    
-    private static func bySubstracting(component: DateComponents, from date: Date) -> Date {
-        Self.calendar.date(byAdding: component, to: date)!
-    }
-    
-    let description: String
-    let start: (Date) -> Date
-    
-    static var oneWeek: TimePeriod {
-        TimePeriod(description: "week") { today in
-            bySubstracting(component: DateComponents(day: -7), from: today)
-        }
-    }
-    
-    static var oneMonth: TimePeriod {
-        TimePeriod(description: "month") { today in
-            bySubstracting(component: DateComponents(month: -1), from: today)
-        }
-    }
-    
-    static var threeMonths: TimePeriod {
-        TimePeriod(description: "three months") { today in
-            bySubstracting(component: DateComponents(month: -3), from: today)
-        }
-    }
-    
-    static var sixMonths: TimePeriod {
-        TimePeriod(description: "six months") { today in
-            bySubstracting(component: DateComponents(month: -6), from: today)
-        }
-    }
-    
-    static var oneYear: TimePeriod {
-        TimePeriod(description: "year") { today in
-            bySubstracting(component: DateComponents(year: -1), from: today)
-        }
-    }
-}
-
-struct Line {
-    let key: String
-    let value: String
-    var display: String { "\(key): \(value)" }
-}
-
-struct Reporting<T, U> {
-    let generate: (T) -> U
-}
-
-extension Reporting where T == [Issue: [Comment]], U == [Line] {
-    
-    static let issuesWithoutMaintainerResponse = Reporting { dict in
-        let issuesWOResponse = dict.filter {
-            !$0.value.contains(where: { $0.authorAssociation == "SOMETHING" })
-        }
-        let lines = issuesWOResponse.keys
-            .map { Line(key: "Number / URL", value: "\($0.number) / \($0.htmlURL)") }
-        return lines
-    }
-}
-
-extension Reporting where T == [Issue: [Comment]], U == Line {
-    
-    static func issuesWithoutMainterResponseInTwoDays(timePeriod: TimePeriod) -> Reporting {
-        .init { dict in
-            let today = Date()
-            let start = timePeriod.start(today)
-            let opened = dict.keys.filter { $0.createdAt >= start }
-            let woResponse = opened.reduce(0) { partialResult, issue in
-                let twoBusinessDaysAfter = Calendar.current
-                    .date(
-                        byAdding: DateComponents(weekday: 2),
-                        to: issue.createdAt
-                    )!
-                
-                return partialResult + (dict[issue]?
-                    .filter { $0.authorAssociation == "SOMETHING" }
-                    .map(\.createdAt)
-                    .sorted(by: >)
-                    .filter { $0 <= twoBusinessDaysAfter }
-                    .count ?? 0)
-            }
-            
-            return Line(key: "# issues opened w/o maintainer response w/in 2 weekdays", value: woResponse.description)
-        }
-    }
-}
-
-extension Reporting where T == [Issue], U == Line {
-    static let amountOfIssues = Reporting { issues in
-        Line(key: "Total amount of issues", value: issues.count.description)
-    }
-    
-    static let amountOfOpenIssues = Reporting { issues in
-        let openIssuesCount = issues
-            .filter { $0.state == "open" }
-            .count
-            .description
-        return Line(key: "Total amount of open issues", value: openIssuesCount)
-    }
-    
-    
-    static func newIssuesOpenedInThePrevious(timePeriod: TimePeriod) -> Reporting {
-        Reporting { issues in
-            let today = Date()
-            let start = timePeriod.start(today)
-            let i = issues.filter { $0.createdAt >= start }
-            return Line(key: "Issues opened in the previous \(timePeriod.description)", value: i.count.description)
-        }
-    }
-    
-    
-    static func issuesClosedThePrevious(timePeriod: TimePeriod) -> Reporting {
-        Reporting { issues in
-            let today = Date()
-            let start = timePeriod.start(today)
-            let i = issues.filter {
-                $0.closedAt != nil && $0.closedAt! >= start
-            }
-            return Line(key: "Issues closed in the previous \(timePeriod.description)", value: i.count.description)
-        }
-    }
-    
-    static func plusMinusInThePrevious(timePeriod: TimePeriod) -> Reporting {
-        Reporting { issues in
-            let today = Date()
-            let start = timePeriod.start(today)
-            let opened = issues.filter { $0.createdAt >= start }.count
-            let closed = issues.filter {
-                $0.closedAt != nil && $0.closedAt! >= start
-            }.count
-            let delta = opened - closed
-            return Line(key: "+ - open/closed in the previous \(timePeriod.description)", value: String(delta))
-        }
-    }
-}
-
-extension Converting {
-    static var report: Converting {
-        Converting { issues in
-            Data()
-        }
     }
 }

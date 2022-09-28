@@ -10,5 +10,3 @@ public struct Issues: AsyncParsableCommand {
     
     public init() { }
 }
-
-//IssueQuery.main()
